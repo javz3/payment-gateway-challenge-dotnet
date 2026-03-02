@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 using Moq;
 
 using PaymentGateway.Api.Models;
@@ -7,6 +9,7 @@ using PaymentGateway.Api.Models.Responses;
 using PaymentGateway.Api.Clients;
 using PaymentGateway.Api.Repositories;
 using PaymentGateway.Api.Services;
+using PaymentGateway.Api.Validators;
 
 namespace PaymentGateway.Api.Tests.Unit;
 
@@ -14,11 +17,16 @@ public class PaymentServiceTests
 {
     private readonly Mock<IBankClient> _bankClientMock = new();
     private readonly Mock<IPaymentsRepository> _repositoryMock = new();
+    private readonly Mock<IPaymentValidator> _validatorMock = new();
     private readonly IPaymentService _paymentService;
 
     public PaymentServiceTests()
     {
-        _paymentService = new PaymentService(_bankClientMock.Object, _repositoryMock.Object);
+        _paymentService = new PaymentService(
+            _bankClientMock.Object,
+            _repositoryMock.Object,
+            _validatorMock.Object,
+            Mock.Of<ILogger<PaymentService>>());
     }
 
     private static PostPaymentRequest CreateValidRequest() => new()
@@ -31,13 +39,11 @@ public class PaymentServiceTests
         Cvv = "123"
     };
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    public async Task RejectsPayment_WhenCardNumberIsNullOrEmpty(string cardNumber)
+    [Fact]
+    public async Task RejectsPayment_WhenValidationFails()
     {
         var request = CreateValidRequest();
-        request.CardNumber = cardNumber;
+        _validatorMock.Setup(v => v.IsValid(request)).Returns(false);
 
         var result = await _paymentService.ProcessPaymentAsync(request);
 
@@ -45,177 +51,11 @@ public class PaymentServiceTests
         _bankClientMock.Verify(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()), Times.Never);
     }
 
-    [Theory]
-    [InlineData("1234567890123")]     // 13 chars — too short
-    [InlineData("12345678901234567890")] // 20 chars — too long
-    public async Task RejectsPayment_WhenCardNumberLengthIsInvalid(string cardNumber)
-    {
-        var request = CreateValidRequest();
-        request.CardNumber = cardNumber;
-
-        var result = await _paymentService.ProcessPaymentAsync(request);
-
-        Assert.Equal(PaymentStatus.Rejected, result.Status);
-    }
-
-    [Fact]
-    public async Task RejectsPayment_WhenCardNumberContainsNonNumericChars()
-    {
-        var request = CreateValidRequest();
-        request.CardNumber = "2222ABCD43248877";
-
-        var result = await _paymentService.ProcessPaymentAsync(request);
-
-        Assert.Equal(PaymentStatus.Rejected, result.Status);
-    }
-
-    [Theory]
-    [InlineData("12345678901234")]      // 14 chars — min valid
-    [InlineData("1234567890123456789")]  // 19 chars — max valid
-    public async Task AcceptsPayment_WhenCardNumberLengthIsValid(string cardNumber)
-    {
-        var request = CreateValidRequest();
-        request.CardNumber = cardNumber;
-        _bankClientMock.Setup(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()))
-            .ReturnsAsync(new BankPaymentResponse { Authorized = true, AuthorizationCode = "abc" });
-
-        var result = await _paymentService.ProcessPaymentAsync(request);
-
-        Assert.NotEqual(PaymentStatus.Rejected, result.Status);
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(13)]
-    [InlineData(-1)]
-    public async Task RejectsPayment_WhenExpiryMonthIsOutOfRange(int month)
-    {
-        var request = CreateValidRequest();
-        request.ExpiryMonth = month;
-
-        var result = await _paymentService.ProcessPaymentAsync(request);
-
-        Assert.Equal(PaymentStatus.Rejected, result.Status);
-    }
-
-    [Fact]
-    public async Task RejectsPayment_WhenExpiryDateIsInThePast()
-    {
-        var request = CreateValidRequest();
-        request.ExpiryYear = DateTime.UtcNow.Year - 1;
-        request.ExpiryMonth = 1;
-
-        var result = await _paymentService.ProcessPaymentAsync(request);
-
-        Assert.Equal(PaymentStatus.Rejected, result.Status);
-    }
-
-    [Fact]
-    public async Task AcceptsPayment_WhenExpiryIsCurrentMonth()
-    {
-        var now = DateTime.UtcNow;
-        var request = CreateValidRequest();
-        request.ExpiryYear = now.Year;
-        request.ExpiryMonth = now.Month;
-        _bankClientMock.Setup(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()))
-            .ReturnsAsync(new BankPaymentResponse { Authorized = true, AuthorizationCode = "abc" });
-
-        var result = await _paymentService.ProcessPaymentAsync(request);
-
-        Assert.NotEqual(PaymentStatus.Rejected, result.Status);
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("XY")]
-    [InlineData("GBPP")]
-    [InlineData("JPY")]
-    public async Task RejectsPayment_WhenCurrencyIsInvalid(string currency)
-    {
-        var request = CreateValidRequest();
-        request.Currency = currency;
-
-        var result = await _paymentService.ProcessPaymentAsync(request);
-
-        Assert.Equal(PaymentStatus.Rejected, result.Status);
-    }
-
-    [Theory]
-    [InlineData("GBP")]
-    [InlineData("USD")]
-    [InlineData("EUR")]
-    [InlineData("gbp")]
-    public async Task AcceptsPayment_WhenCurrencyIsValid(string currency)
-    {
-        var request = CreateValidRequest();
-        request.Currency = currency;
-        _bankClientMock.Setup(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()))
-            .ReturnsAsync(new BankPaymentResponse { Authorized = true, AuthorizationCode = "abc" });
-
-        var result = await _paymentService.ProcessPaymentAsync(request);
-
-        Assert.NotEqual(PaymentStatus.Rejected, result.Status);
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(-1)]
-    public async Task RejectsPayment_WhenAmountIsNotPositive(int amount)
-    {
-        var request = CreateValidRequest();
-        request.Amount = amount;
-
-        var result = await _paymentService.ProcessPaymentAsync(request);
-
-        Assert.Equal(PaymentStatus.Rejected, result.Status);
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("12")]       // too short
-    [InlineData("12345")]    // too long
-    public async Task RejectsPayment_WhenCvvLengthIsInvalid(string cvv)
-    {
-        var request = CreateValidRequest();
-        request.Cvv = cvv;
-
-        var result = await _paymentService.ProcessPaymentAsync(request);
-
-        Assert.Equal(PaymentStatus.Rejected, result.Status);
-    }
-
-    [Fact]
-    public async Task RejectsPayment_WhenCvvContainsNonNumericChars()
-    {
-        var request = CreateValidRequest();
-        request.Cvv = "12A";
-
-        var result = await _paymentService.ProcessPaymentAsync(request);
-
-        Assert.Equal(PaymentStatus.Rejected, result.Status);
-    }
-
-    [Theory]
-    [InlineData("123")]
-    [InlineData("1234")]
-    public async Task AcceptsPayment_WhenCvvLengthIsValid(string cvv)
-    {
-        var request = CreateValidRequest();
-        request.Cvv = cvv;
-        _bankClientMock.Setup(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()))
-            .ReturnsAsync(new BankPaymentResponse { Authorized = true, AuthorizationCode = "abc" });
-
-        var result = await _paymentService.ProcessPaymentAsync(request);
-
-        Assert.NotEqual(PaymentStatus.Rejected, result.Status);
-    }
-
     [Fact]
     public async Task ReturnsAuthorized_WhenBankAuthorizesPayment()
     {
         var request = CreateValidRequest();
+        _validatorMock.Setup(v => v.IsValid(request)).Returns(true);
         _bankClientMock.Setup(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()))
             .ReturnsAsync(new BankPaymentResponse { Authorized = true, AuthorizationCode = "auth-123" });
 
@@ -233,6 +73,7 @@ public class PaymentServiceTests
     public async Task ReturnsDeclined_WhenBankDeclinesPayment()
     {
         var request = CreateValidRequest();
+        _validatorMock.Setup(v => v.IsValid(request)).Returns(true);
         _bankClientMock.Setup(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()))
             .ReturnsAsync(new BankPaymentResponse { Authorized = false, AuthorizationCode = "" });
 
@@ -246,6 +87,7 @@ public class PaymentServiceTests
     {
         var request = CreateValidRequest();
         request.CardNumber = "2222405343248877";
+        _validatorMock.Setup(v => v.IsValid(request)).Returns(true);
         _bankClientMock.Setup(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()))
             .ReturnsAsync(new BankPaymentResponse { Authorized = true, AuthorizationCode = "abc" });
 
@@ -258,6 +100,7 @@ public class PaymentServiceTests
     public async Task StoresPayment_WhenBankRespondsSuccessfully()
     {
         var request = CreateValidRequest();
+        _validatorMock.Setup(v => v.IsValid(request)).Returns(true);
         _bankClientMock.Setup(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()))
             .ReturnsAsync(new BankPaymentResponse { Authorized = true, AuthorizationCode = "abc" });
 
@@ -270,7 +113,7 @@ public class PaymentServiceTests
     public async Task DoesNotStorePayment_WhenRequestIsRejected()
     {
         var request = CreateValidRequest();
-        request.CardNumber = ""; // invalid
+        _validatorMock.Setup(v => v.IsValid(request)).Returns(false);
 
         await _paymentService.ProcessPaymentAsync(request);
 
@@ -283,6 +126,7 @@ public class PaymentServiceTests
         var request = CreateValidRequest();
         request.ExpiryMonth = 4;
         request.ExpiryYear = 2026;
+        _validatorMock.Setup(v => v.IsValid(request)).Returns(true);
 
         BankPaymentRequest? capturedRequest = null;
         _bankClientMock.Setup(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()))
@@ -300,12 +144,26 @@ public class PaymentServiceTests
     }
 
     [Fact]
-    public async Task ThrowsException_WhenBankReturnsError()
+    public async Task ThrowsBankUnavailableException_WhenBankFails()
     {
         var request = CreateValidRequest();
+        _validatorMock.Setup(v => v.IsValid(request)).Returns(true);
         _bankClientMock.Setup(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()))
-            .ThrowsAsync(new HttpRequestException("Service Unavailable"));
+            .ThrowsAsync(new Exceptions.BankUnavailableException("Service Unavailable"));
 
-        await Assert.ThrowsAsync<HttpRequestException>(() => _paymentService.ProcessPaymentAsync(request));
+        await Assert.ThrowsAsync<Exceptions.BankUnavailableException>(
+            () => _paymentService.ProcessPaymentAsync(request));
+    }
+
+    [Fact]
+    public async Task ThrowsBankRequestException_WhenBankRejectsRequest()
+    {
+        var request = CreateValidRequest();
+        _validatorMock.Setup(v => v.IsValid(request)).Returns(true);
+        _bankClientMock.Setup(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()))
+            .ThrowsAsync(new Exceptions.BankRequestException("Bank rejected the request with status 400."));
+
+        await Assert.ThrowsAsync<Exceptions.BankRequestException>(
+            () => _paymentService.ProcessPaymentAsync(request));
     }
 }

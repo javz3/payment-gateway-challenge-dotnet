@@ -1,3 +1,8 @@
+using Microsoft.Extensions.Logging;
+
+using Moq;
+
+using PaymentGateway.Api.Exceptions;
 using PaymentGateway.Api.Models.Bank;
 using PaymentGateway.Api.Clients;
 
@@ -13,7 +18,7 @@ public class BankClientTests
     public BankClientTests()
     {
         var httpClient = new HttpClient { BaseAddress = new Uri("http://localhost:8080") };
-        _sut = new BankClient(httpClient);
+        _sut = new BankClient(httpClient, Mock.Of<ILogger<BankClient>>());
     }
 
     private static BankPaymentRequest CreateRequest(string cardNumber) => new()
@@ -53,12 +58,12 @@ public class BankClientTests
     }
 
     [Fact]
-    public async Task ThrowsHttpRequestException_WhenLastDigitIsZero()
+    public async Task ThrowsBankUnavailableException_WhenLastDigitIsZero()
     {
         // Arrange
         var request = CreateRequest("2222405343248870");
 
         // Act & Assert
-        await Assert.ThrowsAsync<HttpRequestException>(() => _sut.ProcessPaymentAsync(request));
+        await Assert.ThrowsAsync<BankUnavailableException>(() => _sut.ProcessPaymentAsync(request));
     }
 }

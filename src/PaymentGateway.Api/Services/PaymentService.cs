@@ -4,31 +4,36 @@ using PaymentGateway.Api.Models.Bank;
 using PaymentGateway.Api.Models.Requests;
 using PaymentGateway.Api.Models.Responses;
 using PaymentGateway.Api.Repositories;
+using PaymentGateway.Api.Validators;
 
 namespace PaymentGateway.Api.Services;
 
 public class PaymentService : IPaymentService
 {
-    private static readonly HashSet<string> SupportedCurrencies = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "GBP", "USD", "EUR"
-    };
-
     private readonly IBankClient _bankClient;
     private readonly IPaymentsRepository _repository;
+    private readonly IPaymentValidator _validator;
+    private readonly ILogger<PaymentService> _logger;
 
-    public PaymentService(IBankClient bankClient, IPaymentsRepository repository)
+    public PaymentService(
+        IBankClient bankClient,
+        IPaymentsRepository repository,
+        IPaymentValidator validator,
+        ILogger<PaymentService> logger)
     {
         _bankClient = bankClient;
         _repository = repository;
+        _validator = validator;
+        _logger = logger;
     }
 
     public PaymentResponse? GetPayment(Guid id) => _repository.Get(id);
 
     public async Task<PaymentResponse> ProcessPaymentAsync(PostPaymentRequest request)
     {
-        if (!IsValid(request))
+        if (!_validator.IsValid(request))
         {
+            _logger.LogWarning("Payment rejected: request failed validation");
             return new PaymentResponse
             {
                 Id = Guid.NewGuid(),
@@ -36,7 +41,7 @@ public class PaymentService : IPaymentService
             };
         }
 
-        var bankRequest = new BankPaymentRequest
+        BankPaymentRequest bankRequest = new BankPaymentRequest
         {
             CardNumber = request.CardNumber,
             ExpiryDate = $"{request.ExpiryMonth:D2}/{request.ExpiryYear}",
@@ -45,9 +50,9 @@ public class PaymentService : IPaymentService
             Cvv = request.Cvv
         };
 
-        var bankResponse = await _bankClient.ProcessPaymentAsync(bankRequest);
+        BankPaymentResponse bankResponse = await _bankClient.ProcessPaymentAsync(bankRequest);
 
-        var payment = new PaymentResponse
+        PaymentResponse payment = new PaymentResponse
         {
             Id = Guid.NewGuid(),
             Status = bankResponse.Authorized ? PaymentStatus.Authorized : PaymentStatus.Declined,
@@ -60,38 +65,10 @@ public class PaymentService : IPaymentService
 
         _repository.Add(payment);
 
+        _logger.LogInformation(
+            "Payment {PaymentId} processed: {Status}, card ending {LastFour}, {Amount} {Currency}",
+            payment.Id, payment.Status, payment.CardNumberLastFour, payment.Amount, payment.Currency);
+
         return payment;
-    }
-
-    private static bool IsValid(PostPaymentRequest request)
-    {
-        if (string.IsNullOrEmpty(request.CardNumber)
-            || request.CardNumber.Length < 14
-            || request.CardNumber.Length > 19
-            || !request.CardNumber.All(char.IsDigit))
-            return false;
-
-        if (request.ExpiryMonth < 1 || request.ExpiryMonth > 12)
-            return false;
-
-        var now = DateTime.UtcNow;
-        if (request.ExpiryYear < now.Year
-            || (request.ExpiryYear == now.Year && request.ExpiryMonth < now.Month))
-            return false;
-
-        if (string.IsNullOrEmpty(request.Currency)
-            || !SupportedCurrencies.Contains(request.Currency))
-            return false;
-
-        if (request.Amount <= 0)
-            return false;
-
-        if (string.IsNullOrEmpty(request.Cvv)
-            || request.Cvv.Length < 3
-            || request.Cvv.Length > 4
-            || !request.Cvv.All(char.IsDigit))
-            return false;
-
-        return true;
     }
 }

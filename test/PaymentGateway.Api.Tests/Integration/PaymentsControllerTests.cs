@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Moq;
 
 using PaymentGateway.Api.Controllers;
+using PaymentGateway.Api.Exceptions;
 using PaymentGateway.Api.Models;
 using PaymentGateway.Api.Models.Bank;
 using PaymentGateway.Api.Models.Requests;
@@ -197,12 +198,12 @@ public class PaymentsControllerTests
             Cvv = "999"
         };
 
-        // Act — POST
+        // Act - POST
         var postResponse = await client.PostAsJsonAsync("/api/Payments", request);
         var createdPayment = await postResponse.Content.ReadFromJsonAsync<PaymentResponse>(JsonOptions);
         Assert.NotNull(createdPayment);
 
-        // Act — GET
+        // Act - GET
         var getResponse = await client.GetAsync($"/api/Payments/{createdPayment!.Id}");
         var retrievedPayment = await getResponse.Content.ReadFromJsonAsync<PaymentResponse>(JsonOptions);
 
@@ -223,7 +224,7 @@ public class PaymentsControllerTests
     {
         // Arrange
         _bankClientMock.Setup(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()))
-            .ThrowsAsync(new HttpRequestException("Service Unavailable"));
+            .ThrowsAsync(new BankUnavailableException("Service Unavailable"));
 
         var client = CreateClient();
 
@@ -242,5 +243,57 @@ public class PaymentsControllerTests
 
         // Assert
         Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task PostPayment_Returns500_WhenBankRejectsRequest()
+    {
+        // Arrange
+        _bankClientMock.Setup(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()))
+            .ThrowsAsync(new BankRequestException("Bank rejected the request with status 400."));
+
+        var client = CreateClient();
+
+        var request = new PostPaymentRequest
+        {
+            CardNumber = "2222405343248877",
+            ExpiryMonth = 12,
+            ExpiryYear = DateTime.UtcNow.Year + 1,
+            Currency = "GBP",
+            Amount = 100,
+            Cvv = "123"
+        };
+
+        // Act
+        var response = await client.PostAsJsonAsync("/api/Payments", request);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task PostPayment_Returns500_WhenUnexpectedExceptionOccurs()
+    {
+        // Arrange
+        _bankClientMock.Setup(b => b.ProcessPaymentAsync(It.IsAny<BankPaymentRequest>()))
+            .ThrowsAsync(new InvalidOperationException("Something unexpected"));
+
+        var client = CreateClient();
+
+        var request = new PostPaymentRequest
+        {
+            CardNumber = "2222405343248877",
+            ExpiryMonth = 12,
+            ExpiryYear = DateTime.UtcNow.Year + 1,
+            Currency = "GBP",
+            Amount = 100,
+            Cvv = "123"
+        };
+
+        // Act
+        var response = await client.PostAsJsonAsync("/api/Payments", request);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
     }
 }
