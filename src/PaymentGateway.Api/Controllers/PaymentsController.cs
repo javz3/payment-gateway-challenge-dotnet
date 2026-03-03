@@ -55,7 +55,7 @@ public class PaymentsController : ControllerBase
                 return BadRequest(result);
             }
 
-            return Ok(result);
+            return CreatedAtAction(nameof(GetPayment), new { id = result.Id }, result);
         }
         catch (BankUnavailableException ex)
         {

@@ -113,7 +113,7 @@ public class PaymentsControllerTests
         var paymentResponse = await response.Content.ReadFromJsonAsync<PaymentResponse>(JsonOptions);
 
         // Assert
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.NotNull(paymentResponse);
         Assert.Equal(PaymentStatus.Authorized, paymentResponse!.Status);
         Assert.Equal("8877", paymentResponse.CardNumberLastFour);
@@ -148,7 +148,7 @@ public class PaymentsControllerTests
         var paymentResponse = await response.Content.ReadFromJsonAsync<PaymentResponse>(JsonOptions);
 
         // Assert
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.NotNull(paymentResponse);
         Assert.Equal(PaymentStatus.Declined, paymentResponse!.Status);
     }
